@@ -2,9 +2,14 @@ package com.example.copy_android_ocr_tesstwo;
 
 import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
+import androidx.core.content.FileProvider;
 
+import android.Manifest;
 import android.app.Activity;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.net.Uri;
@@ -20,17 +25,21 @@ import com.googlecode.tesseract.android.TessBaseAPI;
 
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.text.SimpleDateFormat;
+import java.util.Date;
 
 public class MainActivity extends AppCompatActivity {
 
-    private static final String TAG = MainActivity.class.getSimpleName();
     public static final String TESS_DATA = "/tessdata";
+    private static final String TAG = MainActivity.class.getSimpleName();
+    private static final String DATA_PATH = Environment.getExternalStorageDirectory().toString() + "/Tess";
     private TextView textView;
     private TessBaseAPI tessBaseAPI;
     private Uri outputFileDir;
-    private static final String DATA_PATH = Environment.getExternalStorageDirectory().toString()+"/Tess";
+    private String mCurrentPhotoPath;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -38,59 +47,97 @@ public class MainActivity extends AppCompatActivity {
         setContentView(R.layout.activity_main);
 
         textView = (TextView) this.findViewById(R.id.textview);
-
+        final Activity activity = this;
+        checkPermission();
         this.findViewById(R.id.button).setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                startCameraActivity();
+                checkPermission();
+                dispatchTakePictureIntent();
             }
         });
     }
 
-    private void startCameraActivity() {
-        try{
-            String imagePath = DATA_PATH+ "/imgs";
-            File dir;
-            dir = new File(imagePath);
-            if(!dir.exists()) dir.mkdir();
-            String imageFilepath = imagePath+"/ocr.jpg";
-            outputFileDir = Uri.fromFile(new File(imageFilepath));
-            final Intent pictureIntent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
-            pictureIntent.putExtra(MediaStore.EXTRA_OUTPUT,outputFileDir);
-            if(pictureIntent.resolveActivity(getPackageManager()) != null){
-                startActivityForResult(pictureIntent,100);
-            }
-        }catch (Exception e){
-            Log.e(TAG, e.getMessage());
+    private void checkPermission() {
+        if (ContextCompat.checkSelfPermission(getApplicationContext(), Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.READ_EXTERNAL_STORAGE}, 120);
         }
+        if (ContextCompat.checkSelfPermission(getApplicationContext(), Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, 121);
+        }
+    }
 
+
+    private void dispatchTakePictureIntent() {
+        Intent takePictureIntent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+        // Ensure that there's a camera activity to handle the intent
+        if (takePictureIntent.resolveActivity(getPackageManager()) != null) {
+            // Create the File where the photo should go
+            File photoFile = null;
+            try {
+                photoFile = createImageFile();
+            } catch (IOException ex) {
+                // Error occurred while creating the File
+            }
+            // Continue only if the File was successfully created
+            if (photoFile != null) {
+                Uri photoURI = FileProvider.getUriForFile(this,
+                        BuildConfig.APPLICATION_ID + ".provider",
+                        photoFile);
+                takePictureIntent.putExtra(MediaStore.EXTRA_OUTPUT, photoURI);
+                startActivityForResult(takePictureIntent, 1024);
+            }
+        }
+    }
+
+    private File createImageFile() throws IOException {
+        // Create an image file name
+        String timeStamp = new SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date());
+        String imageFileName = "JPEG_" + timeStamp + "_";
+        File storageDir = getExternalFilesDir(Environment.DIRECTORY_PICTURES);
+        File image = File.createTempFile(
+                imageFileName,  /* prefix */
+                ".jpg",         /* suffix */
+                storageDir      /* directory */
+        );
+
+        // Save a file: path for use with ACTION_VIEW intents
+        mCurrentPhotoPath = image.getAbsolutePath();
+        return image;
     }
 
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode == 100 && resultCode == Activity.RESULT_OK) {
-            prepareTessData();
-            startOCR(outputFileDir);
-        } else {
-            Toast.makeText(getApplicationContext(), "Image problem", Toast.LENGTH_SHORT).show();
+        if (requestCode == 1024) {
+            if (resultCode == Activity.RESULT_OK) {
+                prepareTessData();
+                startOCR(outputFileDir);
+            } else if (resultCode == Activity.RESULT_CANCELED) {
+                Toast.makeText(getApplicationContext(), "Result canceled.", Toast.LENGTH_SHORT).show();
+            } else {
+                Toast.makeText(getApplicationContext(), "Activity result failed.", Toast.LENGTH_SHORT).show();
+            }
         }
     }
+
     private void prepareTessData(){
         try{
-            File dir = new File(DATA_PATH + TESS_DATA);
+            File dir = getExternalFilesDir(TESS_DATA);
             if(!dir.exists()){
-                dir.mkdir();
+                if (!dir.mkdir()) {
+                    Toast.makeText(getApplicationContext(), "The folder " + dir.getPath() + "was not created", Toast.LENGTH_SHORT).show();
+                }
             }
-            String[] fileList = getAssets().list("");
+            String fileList[] = getAssets().list("");
             for(String fileName : fileList){
-                String pathToDataFile = DATA_PATH+TESS_DATA+"/"+fileName;
+                String pathToDataFile = dir + "/" + fileName;
                 if(!(new File(pathToDataFile)).exists()){
                     InputStream in = getAssets().open(fileName);
                     OutputStream out = new FileOutputStream(pathToDataFile);
                     byte [] buff = new byte[1024];
-                    int len;
-                    while((len = in.read(buff)) > 0){
+                    int len ;
+                    while(( len = in.read(buff)) > 0){
                         out.write(buff,0,len);
                     }
                     in.close();
@@ -98,28 +145,31 @@ public class MainActivity extends AppCompatActivity {
                 }
             }
         } catch (Exception e) {
-            e.printStackTrace();
+            Log.e(TAG, e.getMessage());
         }
     }
 
     private void startOCR(Uri imageUri){
         try{
             BitmapFactory.Options options = new BitmapFactory.Options();
-            options.inSampleSize = 7;
-            Bitmap bitmap = BitmapFactory.decodeFile(imageUri.getPath(),options);
+            options.inJustDecodeBounds = false;
+            options.inSampleSize = 6;
+            Bitmap bitmap = BitmapFactory.decodeFile(mCurrentPhotoPath, options);
             String result = this.getText(bitmap);
             textView.setText(result);
         }catch (Exception e){
             Log.e(TAG, e.getMessage());
         }
     }
+
     private String getText(Bitmap bitmap){
         try{
             tessBaseAPI = new TessBaseAPI();
         }catch (Exception e){
             Log.e(TAG, e.getMessage());
         }
-        tessBaseAPI.init(DATA_PATH,"eng");
+        String dataPath = getExternalFilesDir("/").getPath() + "/";
+        tessBaseAPI.init(dataPath, "eng");
         tessBaseAPI.setImage(bitmap);
         String retStr = "No result";
         try{
